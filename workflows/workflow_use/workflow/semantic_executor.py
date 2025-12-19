@@ -523,130 +523,74 @@ class SemanticWorkflowExecutor:
 
 		return None
 
-	async def _find_element_by_direct_text_search(self, target_text: str) -> Optional[str]:
+	async def _find_and_click_by_text(self, target_text: str) -> bool:
 		"""
-		Search for an element directly on the page by its text content.
-		This is a fallback when semantic mapping fails to find the element.
+		Find and click an element directly by its text content using JavaScript.
+		This is the simplest, most reliable fallback when semantic mapping fails.
 
 		Args:
 		    target_text: The text to search for
 
 		Returns:
-		    CSS selector for the element if found, None otherwise
+		    True if element was found and clicked, False otherwise
 		"""
 		if not target_text:
-			return None
+			return False
 
 		page = await self.browser.get_current_page()
 
-		# JavaScript to find clickable elements by text content
+		# Simple JavaScript to find and click element by text
 		js_code = """
 		(targetText) => {
-			const normalizeText = (text) => {
-				return (text || '').toLowerCase().trim().replace(/\\s+/g, ' ');
-			};
+			const normalize = (s) => (s || '').toLowerCase().trim();
+			const target = normalize(targetText);
+			if (!target) return { success: false, error: 'Empty target text' };
 
-			const targetNormalized = normalizeText(targetText);
-			if (!targetNormalized) return null;
+			// Search all clickable elements
+			const clickable = document.querySelectorAll(
+				'button, a, input[type="submit"], input[type="button"], [role="button"], [onclick]'
+			);
 
-			// Search for clickable elements
-			const clickableSelectors = [
-				'button',
-				'input[type="submit"]',
-				'input[type="button"]',
-				'a',
-				'[role="button"]',
-				'[onclick]',
-				'.btn',
-				'.button'
-			];
+			for (const el of clickable) {
+				// Check various text sources
+				const texts = [
+					el.textContent,
+					el.getAttribute('aria-label'),
+					el.getAttribute('title'),
+					el.value
+				].map(normalize).filter(Boolean);
 
-			const allClickable = document.querySelectorAll(clickableSelectors.join(', '));
+				const found = texts.some(t => t === target || t.includes(target) || target.includes(t));
+				if (!found) continue;
 
-			for (const el of allClickable) {
-				// Get all text sources
-				const textContent = normalizeText(el.textContent);
-				const ariaLabel = normalizeText(el.getAttribute('aria-label'));
-				const title = normalizeText(el.getAttribute('title'));
-				const value = normalizeText(el.value);
-
-				// Check if any text source matches
-				const matches = [textContent, ariaLabel, title, value].some(text => {
-					if (!text) return false;
-					return text === targetNormalized ||
-						   text.includes(targetNormalized) ||
-						   targetNormalized.includes(text);
-				});
-
-				if (matches) {
-					// Check if element is visible
-					const rect = el.getBoundingClientRect();
-					const style = getComputedStyle(el);
-					if (rect.width === 0 || rect.height === 0 ||
-						style.visibility === 'hidden' ||
-						style.display === 'none') {
-						continue;
-					}
-
-					// Generate a unique selector
-					if (el.id) {
-						return '#' + el.id;
-					}
-
-					// Try to build a unique selector
-					let selector = el.tagName.toLowerCase();
-
-					if (el.name) {
-						selector += '[name="' + el.name + '"]';
-					} else if (el.type && el.type !== 'submit') {
-						selector += '[type="' + el.type + '"]';
-					}
-
-					// Add classes for specificity
-					if (el.className && typeof el.className === 'string') {
-						const classes = el.className.split(' ').filter(c => c && !c.includes(':'));
-						if (classes.length > 0) {
-							selector += '.' + classes.slice(0, 2).join('.');
-						}
-					}
-
-					// Verify uniqueness
-					const matches = document.querySelectorAll(selector);
-					if (matches.length === 1) {
-						return selector;
-					}
-
-					// Add nth-of-type if needed
-					const parent = el.parentElement;
-					if (parent) {
-						const siblings = Array.from(parent.querySelectorAll(':scope > ' + el.tagName.toLowerCase()));
-						const index = siblings.indexOf(el) + 1;
-						if (index > 0) {
-							const parentSelector = parent.id ? '#' + parent.id : parent.tagName.toLowerCase();
-							return parentSelector + ' > ' + el.tagName.toLowerCase() + ':nth-of-type(' + index + ')';
-						}
-					}
-
-					// Return basic selector as fallback
-					return selector;
+				// Check visibility
+				const rect = el.getBoundingClientRect();
+				const style = getComputedStyle(el);
+				if (rect.width === 0 || rect.height === 0 ||
+					style.visibility === 'hidden' || style.display === 'none') {
+					continue;
 				}
+
+				// Click it
+				el.click();
+				return { success: true, text: el.textContent?.trim(), tag: el.tagName };
 			}
 
-			return null;
+			return { success: false, error: 'No matching element found' };
 		}
 		"""
 
 		try:
-			selector = await page.evaluate(js_code, target_text)
-			if selector:
-				logger.info(f"🔍 Direct text search found element: '{target_text}' -> {selector}")
-				return selector
+			result = await page.evaluate(js_code, target_text)
+			if result and result.get('success'):
+				logger.info(f"✅ Clicked element by text: '{target_text}' -> {result.get('tag')} '{result.get('text')}'")
+				return True
 			else:
-				logger.debug(f"Direct text search did not find element for: '{target_text}'")
-				return None
+				logger.debug(f"Direct text click failed: {result.get('error') if result else 'unknown'}")
+				return False
 		except Exception as e:
-			logger.debug(f"Direct text search failed: {e}")
-			return None
+			logger.debug(f"Direct text click failed: {e}")
+			return False
 
 	async def _try_direct_selector(self, target_text: str) -> Optional[str]:
 		"""Try to use target_text as a direct selector (ID or name) with improved robustness."""
@@ -996,13 +940,11 @@ class SemanticWorkflowExecutor:
 				selector_to_use = f'xpath={step.xpath}'
 				logger.info(f'Falling back to XPath selector: {step.xpath}')
 
-		# PRIORITY 4: Direct text search on the page (when semantic mapping fails)
+		# PRIORITY 4: Direct text search and click (simplest fallback when all else fails)
 		if not selector_to_use and target_identifier:
-			logger.info(f'🔍 Trying direct text search for: {target_identifier}')
-			direct_selector = await self._find_element_by_direct_text_search(target_identifier)
-			if direct_selector:
-				selector_to_use = direct_selector
-				logger.info(f'✅ Found element via direct text search: {direct_selector}')
+			logger.info(f'🔍 Trying direct text click for: {target_identifier}')
+			if await self._find_and_click_by_text(target_identifier):
+				return ActionResult(extracted_content=f'Clicked element: {target_identifier}')
 
 		# If still no selector, raise error
 		if not selector_to_use:
