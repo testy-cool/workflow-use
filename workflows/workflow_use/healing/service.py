@@ -475,10 +475,245 @@ class HealingService:
 				self.selector_generator = selector_generator
 				self.on_step_recorded = on_step_recorded
 
-			async def act(self, action, browser_session, *args, **kwargs):
-				# Get the selector map before action
+			def _process_element(self, index, dom_element, debug_mode=False):
+				"""Process a single DOM element and extract its data with selector strategies."""
+				# DEBUG: Print all fields for first 3 elements to see what's available
+				if debug_mode:
+					print(f'\n🔍 DEBUG - Element {index}:')
+					print(f'   Type: {type(dom_element)}')
+					if isinstance(dom_element, dict):
+						print(f'   Dict keys: {list(dom_element.keys())}')
+						print(f'   Content: {dom_element}')
+					elif hasattr(dom_element, '__dict__'):
+						print(f'   Available fields: {list(dom_element.__dict__.keys())}')
+						print(f'   Values: {dom_element.__dict__}')
+					else:
+						attrs = [attr for attr in dir(dom_element) if not attr.startswith('_')]
+						print(f'   Dir (non-private): {attrs}')
+						# Print values of key attributes
+						for attr in ['text', 'inner_text', 'node_value', 'node_name', 'attributes']:
+							if hasattr(dom_element, attr):
+								val = getattr(dom_element, attr, None)
+								print(f'   {attr}: {val}')
+
+				# Handle dict format (from selector_map)
+				if isinstance(dom_element, dict):
+					text = dom_element.get('text', '')
+					tag_name = dom_element.get('tag_name', '')
+					attrs = dom_element.get('attributes', {})
+				else:
+					# Extract tag name first
+					tag_name = (
+						getattr(dom_element, 'node_name', '').lower() if hasattr(dom_element, 'node_name') else ''
+					)
+					attrs = getattr(dom_element, 'attributes', {})
+
+					# Extract text by trying multiple field names
+					text = ''
+					for text_field in ['text', 'inner_text', 'node_value', 'textContent', 'innerText']:
+						if hasattr(dom_element, text_field):
+							potential_text = getattr(dom_element, text_field, '')
+							if potential_text and potential_text.strip():
+								# IMPORTANT: Skip JavaScript href text (same filter as in deterministic_converter.py)
+								# browser-use sometimes provides JavaScript href as 'text' for anchor tags
+								if tag_name == 'a' and potential_text.lower().startswith('javascript:'):
+									continue
+								text = potential_text
+								break
+
+				# Normalize text (strip whitespace)
+				text = text.strip() if text else ''
+
+				# For interactive elements (links, buttons), prioritize semantic attributes
+				# over potentially meaningless text content
+				if tag_name in ['a', 'button'] and isinstance(attrs, dict):
+					# Check if current text is very short or looks like an ID/hash
+					is_poor_text = (
+						not text
+						or len(text) <= 2  # Single char or very short
+						or text.lower() in ['link', 'button', 'click', 'here']  # Generic text
+						or (len(text) == 8 and text.isalnum())  # Looks like an ID (e.g., "nboo9eyy")
+					)
+
+					if is_poor_text:
+						# Try semantic attributes first for better context
+						semantic_text = (
+							attrs.get('aria-label')
+							or attrs.get('title')
+							or attrs.get('alt')
+							or attrs.get('placeholder')
+							or attrs.get('value')
+							or ''
+						)
+
+						if semantic_text:
+							text = semantic_text
+							print(f'   📎 Using semantic attribute for better text: "{text}"')
+						# For anchor tags, try ID/class-based inference for common button patterns
+						elif tag_name == 'a':
+							element_id = attrs.get('id', '')
+							element_class = attrs.get('class', '')
+
+							# Check for common button patterns in ID/class
+							id_lower = element_id.lower() if element_id else ''
+							class_lower = element_class.lower() if element_class else ''
+
+							# Common search/submit button patterns
+							if 'search' in id_lower or 'search' in class_lower:
+								text = 'Search'
+								print(f'   📎 Inferred "Search" from ID/class: {element_id or element_class}')
+							elif 'submit' in id_lower or 'submit' in class_lower:
+								text = 'Submit'
+								print(f'   📎 Inferred "Submit" from ID/class: {element_id or element_class}')
+							elif 'action' in id_lower or 'action' in class_lower:
+								# cmdAction, btnAction, etc. in forms usually means Submit/Search
+								if 'sqlviewpro' in id_lower or 'parameter' in id_lower:
+									text = 'Search'
+									print(f'   📎 Inferred "Search" from form action button: {element_id}')
+								else:
+									text = 'Submit'
+									print(f'   📎 Inferred "Submit" from action button: {element_id}')
+							# If still no text after ID/class inference, try href extraction
+							elif 'href' in attrs:
+								href = attrs['href']
+								# Skip JavaScript hrefs - they don't have meaningful text to extract
+								if isinstance(href, str) and not href.lower().startswith('javascript:'):
+									# Extract the last meaningful part of the URL path
+									# E.g., "https://newsroom.edison.com/releases" -> "releases"
+									# Remove query params and anchors
+									href = href.split('?')[0].split('#')[0]
+									# Get the last path segment
+									path_parts = href.rstrip('/').split('/')
+									if path_parts:
+										last_part = path_parts[-1]
+										# Only use if it looks like readable text
+										# Avoid random IDs like "nboo9eyy" (all lowercase alphanumeric with no separators)
+										if last_part and last_part not in [
+											'www.edison.com',
+											'edison.com',
+											'investors',
+										]:
+											# Check if it has word separators (hyphens, underscores)
+											if '-' in last_part or '_' in last_part:
+												text = last_part.replace('-', ' ').replace('_', ' ').title()
+												print(f'   📎 Extracted from href: "{text}"')
+											# Fallback: use clean slugs without separators (e.g., "login", "dashboard")
+											# Only if they're reasonable length and look like words (not random IDs)
+											elif len(last_part) >= 3 and len(last_part) <= 20 and last_part.isalpha():
+												text = last_part.title()
+												print(f'   📎 Extracted clean slug from href: "{text}"')
+
+				# Final fallback for any element (not anchor/button): if still no text, try attributes
+				elif not text:
+					if isinstance(attrs, dict):
+						# Try common text attributes
+						text = (
+							attrs.get('aria-label')
+							or attrs.get('title')
+							or attrs.get('alt')
+							or attrs.get('placeholder')
+							or attrs.get('value')
+							or ''
+						)
+						# Note: ID/class inference for anchor tags is now handled above in the anchor/button block
+
+				# Create a simplified dict with the data we need
+				# Handle both dict and object formats
+				if isinstance(dom_element, dict):
+					element_data = {
+						'index': index,
+						'tag_name': tag_name or dom_element.get('tag_name', ''),
+						'text': text,
+						'xpath': dom_element.get('xpath', '') or dom_element.get('x_path', ''),
+						'css_selector': dom_element.get('css_selector', ''),
+						'attributes': attrs,
+					}
+				else:
+					element_data = {
+						'index': index,
+						'tag_name': tag_name,
+						'text': text,
+						'xpath': getattr(dom_element, 'x_path', '') or getattr(dom_element, 'xpath', ''),
+						'css_selector': getattr(dom_element, 'css_selector', ''),
+						'attributes': attrs,
+					}
+
+				# Generate multiple selector strategies for robust element finding
 				try:
-					selector_map = await browser_session.get_selector_map()
+					strategies = self.selector_generator.generate_strategies_dict(element_data)
+					element_data['selector_strategies'] = strategies
+				except Exception as e:
+					print(f'   ⚠️  Warning: Failed to generate selector strategies: {e}')
+					element_data['selector_strategies'] = []
+
+				return element_data
+
+			def _get_action_target_index(self, action) -> Optional[int]:
+				"""Extract the target element index from an action."""
+				action_dict = action.model_dump() if hasattr(action, 'model_dump') else {}
+				for key, value in action_dict.items():
+					if isinstance(value, dict) and 'index' in value:
+						return value['index']
+				return None
+
+			async def _capture_selector_map(self, browser_session, target_index=None, max_retries=3, retry_delay=0.5):
+				"""
+				Capture selector map with retry logic for dynamic elements.
+
+				If target_index is provided and not found in the map, will retry
+				up to max_retries times with retry_delay between attempts.
+				This handles dynamically appearing elements (modals, popups, overlays).
+				"""
+				import asyncio
+
+				for attempt in range(max_retries):
+					try:
+						selector_map = await browser_session.get_selector_map()
+
+						if not selector_map:
+							if attempt < max_retries - 1:
+								print(f'   ⏳ Empty selector_map, retrying in {retry_delay}s... (attempt {attempt + 1}/{max_retries})')
+								await asyncio.sleep(retry_delay)
+								continue
+							return {}
+
+						# If we have a target index, check if it's in the map
+						if target_index is not None:
+							if target_index in selector_map or str(target_index) in selector_map:
+								return selector_map
+							else:
+								if attempt < max_retries - 1:
+									print(f'   ⏳ Target index {target_index} not in selector_map ({len(selector_map)} elements), retrying in {retry_delay}s... (attempt {attempt + 1}/{max_retries})')
+									await asyncio.sleep(retry_delay)
+									continue
+								else:
+									print(f'   ⚠️  Target index {target_index} not found after {max_retries} attempts')
+									return selector_map
+						else:
+							return selector_map
+
+					except Exception as e:
+						if attempt < max_retries - 1:
+							print(f'   ⚠️  Error getting selector_map: {e}, retrying...')
+							await asyncio.sleep(retry_delay)
+						else:
+							print(f'   ⚠️  Failed to get selector_map after {max_retries} attempts: {e}')
+							return {}
+
+				return {}
+
+			async def act(self, action, browser_session, *args, **kwargs):
+				# Extract target index from action to know what element we need
+				target_index = self._get_action_target_index(action)
+
+				# Get the selector map before action with retry logic for dynamic elements
+				try:
+					selector_map = await self._capture_selector_map(
+						browser_session,
+						target_index=target_index,
+						max_retries=3,
+						retry_delay=0.5
+					)
 
 					if selector_map:
 						print(f'📋 Captured {len(selector_map)} elements from selector_map')
@@ -486,175 +721,8 @@ class HealingService:
 						# We need to extract text/attributes from each element
 						debug_count = 0
 						for index, dom_element in selector_map.items():
-							# DEBUG: Print all fields for first 3 elements to see what's available
-							if debug_count < 3:
-								print(f'\n🔍 DEBUG - Element {index}:')
-								print(f'   Type: {type(dom_element)}')
-								if isinstance(dom_element, dict):
-									print(f'   Dict keys: {list(dom_element.keys())}')
-									print(f'   Content: {dom_element}')
-								elif hasattr(dom_element, '__dict__'):
-									print(f'   Available fields: {list(dom_element.__dict__.keys())}')
-									print(f'   Values: {dom_element.__dict__}')
-								else:
-									attrs = [attr for attr in dir(dom_element) if not attr.startswith('_')]
-									print(f'   Dir (non-private): {attrs}')
-									# Print values of key attributes
-									for attr in ['text', 'inner_text', 'node_value', 'node_name', 'attributes']:
-										if hasattr(dom_element, attr):
-											val = getattr(dom_element, attr, None)
-											print(f'   {attr}: {val}')
-								debug_count += 1
-
-							# Handle dict format (from selector_map)
-							if isinstance(dom_element, dict):
-								text = dom_element.get('text', '')
-								tag_name = dom_element.get('tag_name', '')
-								attrs = dom_element.get('attributes', {})
-							else:
-								# Extract tag name first
-								tag_name = (
-									getattr(dom_element, 'node_name', '').lower() if hasattr(dom_element, 'node_name') else ''
-								)
-								attrs = getattr(dom_element, 'attributes', {})
-
-								# Extract text by trying multiple field names
-								text = ''
-								for text_field in ['text', 'inner_text', 'node_value', 'textContent', 'innerText']:
-									if hasattr(dom_element, text_field):
-										potential_text = getattr(dom_element, text_field, '')
-										if potential_text and potential_text.strip():
-											# IMPORTANT: Skip JavaScript href text (same filter as in deterministic_converter.py)
-											# browser-use sometimes provides JavaScript href as 'text' for anchor tags
-											if tag_name == 'a' and potential_text.lower().startswith('javascript:'):
-												continue
-											text = potential_text
-											break
-
-							# Normalize text (strip whitespace)
-							text = text.strip() if text else ''
-
-							# For interactive elements (links, buttons), prioritize semantic attributes
-							# over potentially meaningless text content
-							if tag_name in ['a', 'button'] and isinstance(attrs, dict):
-								# Check if current text is very short or looks like an ID/hash
-								is_poor_text = (
-									not text
-									or len(text) <= 2  # Single char or very short
-									or text.lower() in ['link', 'button', 'click', 'here']  # Generic text
-									or (len(text) == 8 and text.isalnum())  # Looks like an ID (e.g., "nboo9eyy")
-								)
-
-								if is_poor_text:
-									# Try semantic attributes first for better context
-									semantic_text = (
-										attrs.get('aria-label')
-										or attrs.get('title')
-										or attrs.get('alt')
-										or attrs.get('placeholder')
-										or attrs.get('value')
-										or ''
-									)
-
-									if semantic_text:
-										text = semantic_text
-										print(f'   📎 Using semantic attribute for better text: "{text}"')
-									# For anchor tags, try ID/class-based inference for common button patterns
-									elif tag_name == 'a':
-										element_id = attrs.get('id', '')
-										element_class = attrs.get('class', '')
-
-										# Check for common button patterns in ID/class
-										id_lower = element_id.lower() if element_id else ''
-										class_lower = element_class.lower() if element_class else ''
-
-										# Common search/submit button patterns
-										if 'search' in id_lower or 'search' in class_lower:
-											text = 'Search'
-											print(f'   📎 Inferred "Search" from ID/class: {element_id or element_class}')
-										elif 'submit' in id_lower or 'submit' in class_lower:
-											text = 'Submit'
-											print(f'   📎 Inferred "Submit" from ID/class: {element_id or element_class}')
-										elif 'action' in id_lower or 'action' in class_lower:
-											# cmdAction, btnAction, etc. in forms usually means Submit/Search
-											if 'sqlviewpro' in id_lower or 'parameter' in id_lower:
-												text = 'Search'
-												print(f'   📎 Inferred "Search" from form action button: {element_id}')
-											else:
-												text = 'Submit'
-												print(f'   📎 Inferred "Submit" from action button: {element_id}')
-										# If still no text after ID/class inference, try href extraction
-										elif 'href' in attrs:
-											href = attrs['href']
-											# Skip JavaScript hrefs - they don't have meaningful text to extract
-											if isinstance(href, str) and not href.lower().startswith('javascript:'):
-												# Extract the last meaningful part of the URL path
-												# E.g., "https://newsroom.edison.com/releases" -> "releases"
-												# Remove query params and anchors
-												href = href.split('?')[0].split('#')[0]
-												# Get the last path segment
-												path_parts = href.rstrip('/').split('/')
-												if path_parts:
-													last_part = path_parts[-1]
-													# Only use if it looks like readable text
-													# Avoid random IDs like "nboo9eyy" (all lowercase alphanumeric with no separators)
-													if last_part and last_part not in [
-														'www.edison.com',
-														'edison.com',
-														'investors',
-													]:
-														# Check if it has word separators (hyphens, underscores)
-														if '-' in last_part or '_' in last_part:
-															text = last_part.replace('-', ' ').replace('_', ' ').title()
-															print(f'   📎 Extracted from href: "{text}"')
-														# Fallback: use clean slugs without separators (e.g., "login", "dashboard")
-														# Only if they're reasonable length and look like words (not random IDs)
-														elif len(last_part) >= 3 and len(last_part) <= 20 and last_part.isalpha():
-															text = last_part.title()
-															print(f'   📎 Extracted clean slug from href: "{text}"')
-
-							# Final fallback for any element (not anchor/button): if still no text, try attributes
-							elif not text:
-								if isinstance(attrs, dict):
-									# Try common text attributes
-									text = (
-										attrs.get('aria-label')
-										or attrs.get('title')
-										or attrs.get('alt')
-										or attrs.get('placeholder')
-										or attrs.get('value')
-										or ''
-									)
-									# Note: ID/class inference for anchor tags is now handled above in the anchor/button block
-
-							# Create a simplified dict with the data we need
-							# Handle both dict and object formats
-							if isinstance(dom_element, dict):
-								element_data = {
-									'index': index,
-									'tag_name': tag_name or dom_element.get('tag_name', ''),
-									'text': text,
-									'xpath': dom_element.get('xpath', '') or dom_element.get('x_path', ''),
-									'css_selector': dom_element.get('css_selector', ''),
-									'attributes': attrs,
-								}
-							else:
-								element_data = {
-									'index': index,
-									'tag_name': tag_name,
-									'text': text,
-									'xpath': getattr(dom_element, 'x_path', '') or getattr(dom_element, 'xpath', ''),
-									'css_selector': getattr(dom_element, 'css_selector', ''),
-									'attributes': attrs,
-								}
-
-							# Generate multiple selector strategies for robust element finding
-							try:
-								strategies = self.selector_generator.generate_strategies_dict(element_data)
-								element_data['selector_strategies'] = strategies
-							except Exception as e:
-								print(f'   ⚠️  Warning: Failed to generate selector strategies: {e}')
-								element_data['selector_strategies'] = []
+							element_data = self._process_element(index, dom_element, debug_mode=(debug_count < 3))
+							debug_count += 1
 
 							# Store in the shared map
 							element_text_map[index] = element_data
@@ -669,6 +737,28 @@ class HealingService:
 
 				# Execute the actual action
 				result = await super().act(action, browser_session, *args, **kwargs)
+
+				# IMPORTANT: Re-capture selector_map AFTER action to catch newly appeared elements
+				# This is crucial for dynamic content like modals, popups, and overlays
+				try:
+					import asyncio
+					# Small delay to let dynamic content render
+					await asyncio.sleep(0.3)
+
+					post_action_map = await browser_session.get_selector_map()
+					if post_action_map:
+						new_elements_count = 0
+						for index, dom_element in post_action_map.items():
+							# Only process elements that weren't in the pre-action map
+							if index not in element_text_map:
+								element_data = self._process_element(index, dom_element, debug_mode=False)
+								element_text_map[index] = element_data
+								new_elements_count += 1
+
+						if new_elements_count > 0:
+							print(f'📋 Captured {new_elements_count} NEW elements after action (dynamic content)')
+				except Exception as e:
+					print(f'⚠️  Warning: Failed to capture elements after action: {e}')
 
 				# Increment step counter (always, regardless of callback)
 				step_counter['count'] += 1

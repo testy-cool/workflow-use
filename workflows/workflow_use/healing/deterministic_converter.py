@@ -324,6 +324,347 @@ class DeterministicWorkflowConverter:
 
 		return None
 
+	def _generate_fallback_strategies(self, target_text: str) -> list:
+		"""
+		Generate basic text-based selector strategies when element_data is not available.
+
+		This is used for dynamic elements (modals, popups, overlays) where we couldn't
+		capture the element in the selector_map but we extracted target_text from agent reasoning.
+		"""
+		strategies = []
+
+		if not target_text or target_text == 'element':
+			return strategies
+
+		# Strategy 1: Exact text match (highest priority for buttons/links)
+		strategies.append({
+			'type': 'text_exact',
+			'value': target_text,
+			'priority': 1,
+			'metadata': {
+				'tag': 'button',  # Common for modals/popups
+				'source': 'fallback_from_reasoning'
+			}
+		})
+
+		# Strategy 2: Role + text match (for buttons)
+		strategies.append({
+			'type': 'role_text',
+			'value': target_text,
+			'priority': 2,
+			'metadata': {
+				'role': 'button',
+				'tag': 'button',
+				'source': 'fallback_from_reasoning'
+			}
+		})
+
+		# Strategy 3: Aria-label match
+		strategies.append({
+			'type': 'aria_label',
+			'value': target_text,
+			'priority': 3,
+			'metadata': {
+				'tag': 'button',
+				'source': 'fallback_from_reasoning'
+			}
+		})
+
+		# Strategy 4: Fuzzy text match (for slight variations)
+		strategies.append({
+			'type': 'text_fuzzy',
+			'value': target_text,
+			'priority': 7,
+			'metadata': {
+				'threshold': 0.8,
+				'tag': 'button',
+				'source': 'fallback_from_reasoning'
+			}
+		})
+
+		# Strategy 5: Common XPath patterns for buttons/links with this text
+		# These are generic patterns that work for most modal buttons
+		escaped_text = target_text.replace("'", "\\'")
+
+		# Button containing text
+		strategies.append({
+			'type': 'xpath',
+			'value': f"//button[contains(normalize-space(.), '{escaped_text}')]",
+			'priority': 5,
+			'metadata': {
+				'tag': 'button',
+				'strategy': 'text-based',
+				'source': 'fallback_from_reasoning'
+			}
+		})
+
+		# Link containing text
+		strategies.append({
+			'type': 'xpath',
+			'value': f"//a[contains(normalize-space(.), '{escaped_text}')]",
+			'priority': 6,
+			'metadata': {
+				'tag': 'a',
+				'strategy': 'text-based',
+				'source': 'fallback_from_reasoning'
+			}
+		})
+
+		# Any element with role=button containing text
+		strategies.append({
+			'type': 'xpath',
+			'value': f"//*[@role='button'][contains(normalize-space(.), '{escaped_text}')]",
+			'priority': 7,
+			'metadata': {
+				'strategy': 'role-based',
+				'source': 'fallback_from_reasoning'
+			}
+		})
+
+		# Common modal/dialog button patterns
+		# These patterns target typical modal close/accept buttons
+		if target_text.lower() in ['close', 'x', '×']:
+			strategies.append({
+				'type': 'xpath',
+				'value': "//button[@aria-label='Close' or @aria-label='close' or contains(@class, 'close')]",
+				'priority': 4,
+				'metadata': {
+					'tag': 'button',
+					'strategy': 'common-close-pattern',
+					'source': 'fallback_from_reasoning'
+				}
+			})
+		elif target_text.lower() in ['accept', 'accept all', 'accept cookies', 'allow', 'allow all']:
+			strategies.append({
+				'type': 'xpath',
+				'value': "//button[contains(@id, 'accept') or contains(@id, 'Accept') or contains(@class, 'accept')]",
+				'priority': 4,
+				'metadata': {
+					'tag': 'button',
+					'strategy': 'common-accept-pattern',
+					'source': 'fallback_from_reasoning'
+				}
+			})
+
+		print(f'      📋 Generated {len(strategies)} fallback strategies for "{target_text}"')
+		return strategies
+
+	def _generate_fallback_input_strategies(self, target_text: str) -> list:
+		"""
+		Generate basic text-based selector strategies for input fields when element_data is not available.
+		"""
+		strategies = []
+
+		if not target_text or target_text == 'input field':
+			return strategies
+
+		escaped_text = target_text.replace("'", "\\'")
+
+		# Strategy 1: Placeholder match (common for input fields)
+		strategies.append({
+			'type': 'placeholder',
+			'value': target_text,
+			'priority': 1,
+			'metadata': {
+				'tag': 'input',
+				'source': 'fallback_from_reasoning'
+			}
+		})
+
+		# Strategy 2: Aria-label match
+		strategies.append({
+			'type': 'aria_label',
+			'value': target_text,
+			'priority': 2,
+			'metadata': {
+				'tag': 'input',
+				'source': 'fallback_from_reasoning'
+			}
+		})
+
+		# Strategy 3: Role + text match (for textbox)
+		strategies.append({
+			'type': 'role_text',
+			'value': target_text,
+			'priority': 3,
+			'metadata': {
+				'role': 'textbox',
+				'tag': 'input',
+				'source': 'fallback_from_reasoning'
+			}
+		})
+
+		# Strategy 4: Input with matching label (using for attribute)
+		strategies.append({
+			'type': 'xpath',
+			'value': f"//input[@id=//label[contains(normalize-space(.), '{escaped_text}')]/@for]",
+			'priority': 4,
+			'metadata': {
+				'tag': 'input',
+				'strategy': 'label-association',
+				'source': 'fallback_from_reasoning'
+			}
+		})
+
+		# Strategy 5: Input with aria-label
+		strategies.append({
+			'type': 'xpath',
+			'value': f"//input[contains(@aria-label, '{escaped_text}')]",
+			'priority': 5,
+			'metadata': {
+				'tag': 'input',
+				'strategy': 'aria-based',
+				'source': 'fallback_from_reasoning'
+			}
+		})
+
+		# Strategy 6: Input with placeholder
+		strategies.append({
+			'type': 'xpath',
+			'value': f"//input[contains(@placeholder, '{escaped_text}')]",
+			'priority': 6,
+			'metadata': {
+				'tag': 'input',
+				'strategy': 'placeholder-based',
+				'source': 'fallback_from_reasoning'
+			}
+		})
+
+		# Strategy 7: Input following a label with this text
+		strategies.append({
+			'type': 'xpath',
+			'value': f"//label[contains(normalize-space(.), '{escaped_text}')]/following::input[1]",
+			'priority': 7,
+			'metadata': {
+				'tag': 'input',
+				'strategy': 'label-following',
+				'source': 'fallback_from_reasoning'
+			}
+		})
+
+		# Strategy 8: Fuzzy match
+		strategies.append({
+			'type': 'text_fuzzy',
+			'value': target_text,
+			'priority': 8,
+			'metadata': {
+				'threshold': 0.8,
+				'tag': 'input',
+				'source': 'fallback_from_reasoning'
+			}
+		})
+
+		print(f'      📋 Generated {len(strategies)} fallback input strategies for "{target_text}"')
+		return strategies
+
+	def _extract_from_agent_reasoning(
+		self, action_dict: Dict[str, Any], agent_context: Optional[Dict[str, Any]] = None
+	) -> Optional[str]:
+		"""
+		Extract target_text from agent reasoning when element_data is not available.
+
+		This is crucial for dynamic elements (modals, popups, overlays) that weren't
+		captured in the selector_map but the agent still described in its reasoning.
+		"""
+		if not agent_context or not agent_context.get('reasoning'):
+			return None
+
+		reasoning = agent_context['reasoning']
+		import re
+
+		# Debug: print the reasoning to see what we're working with
+		print(f'      📝 Agent reasoning (no element_data): {reasoning[:200]}...')
+
+		# Pattern 1: Structured [ELEMENT: "text"] tag (highest priority)
+		# Find ALL [ELEMENT] tags and use the LAST one (closest to the action)
+		matches = list(re.finditer(r'\[ELEMENT:\s*["\']([^"\']+)["\']\]', reasoning))
+		if matches:
+			element_text = matches[-1].group(1).strip()
+			print(f'      ✓ Extracted from [ELEMENT] tag: "{element_text}"')
+			return element_text
+
+		# Pattern 2: [ELEMENT: text] without quotes
+		matches = list(re.finditer(r'\[ELEMENT:\s*([^\]]+)\]', reasoning))
+		if matches:
+			element_text = matches[-1].group(1).strip()
+			print(f'      ✓ Extracted from [ELEMENT] tag (no quotes): "{element_text}"')
+			return element_text
+
+		# Pattern 3: "click on/the X button/link" patterns
+		click_patterns = [
+			r'click\s+(?:on\s+)?(?:the\s+)?["\']([^"\']+)["\']',  # click on "Accept"
+			r'click\s+(?:on\s+)?(?:the\s+)?([A-Z][a-zA-Z\s]+?)\s+(?:button|link|element)',  # click the Accept button
+			r'clicking\s+(?:on\s+)?(?:the\s+)?["\']([^"\']+)["\']',  # clicking on "Accept"
+			r'clicking\s+(?:on\s+)?(?:the\s+)?([A-Z][a-zA-Z\s]+?)\s+(?:button|link|element)',  # clicking the Accept button
+		]
+
+		for pattern in click_patterns:
+			match = re.search(pattern, reasoning, re.IGNORECASE)
+			if match:
+				element_text = match.group(1).strip()
+				# Avoid very long matches (likely false positives)
+				if len(element_text) <= 50:
+					print(f'      ✓ Extracted from click pattern: "{element_text}"')
+					return element_text
+
+		# Pattern 4: Common modal/popup actions
+		modal_patterns = [
+			r'(?:accept|close|dismiss|confirm|cancel|ok|yes|no|continue|proceed)\s+(?:the\s+)?(?:cookie|consent|privacy|popup|modal|dialog|banner)',
+			r'(?:cookie|consent|privacy|popup|modal|dialog|banner)\s+(?:accept|close|dismiss|confirm)',
+		]
+
+		reasoning_lower = reasoning.lower()
+		for pattern in modal_patterns:
+			match = re.search(pattern, reasoning_lower)
+			if match:
+				matched_text = match.group(0)
+				# Infer the button text from the action
+				if 'accept' in matched_text:
+					print(f'      ✓ Inferred "Accept" from modal pattern')
+					return 'Accept'
+				elif 'close' in matched_text or 'dismiss' in matched_text:
+					print(f'      ✓ Inferred "Close" from modal pattern')
+					return 'Close'
+				elif 'continue' in matched_text or 'proceed' in matched_text:
+					print(f'      ✓ Inferred "Continue" from modal pattern')
+					return 'Continue'
+				elif 'confirm' in matched_text or 'ok' in matched_text or 'yes' in matched_text:
+					print(f'      ✓ Inferred "OK" from modal pattern')
+					return 'OK'
+
+		# Pattern 5: "Add to Cart/Bag" actions (common e-commerce)
+		cart_patterns = [
+			r'add\s+(?:to\s+)?(?:cart|bag|basket)',
+			r'(?:cart|bag|basket)\s+button',
+		]
+		for pattern in cart_patterns:
+			if re.search(pattern, reasoning_lower):
+				print(f'      ✓ Inferred "Add to Bag" from cart pattern')
+				return 'Add to Bag'
+
+		# Pattern 6: Size/color selection (e-commerce)
+		size_match = re.search(r'select(?:ing)?\s+(?:the\s+)?(?:size\s+)?["\']?([A-Z]{1,3}|[0-9]+(?:\.[0-9]+)?)["\']?', reasoning, re.IGNORECASE)
+		if size_match:
+			size_text = size_match.group(1).strip()
+			print(f'      ✓ Extracted size selection: "{size_text}"')
+			return size_text
+
+		# Pattern 7: Input field mentions for input actions
+		action_value = action_dict.get('text') or action_dict.get('value')
+		if action_value:
+			# Look for field name mentions
+			field_match = re.search(
+				rf'["\']?{re.escape(str(action_value))}["\']?[^.]*?(?:into|in|for|to)\s+(?:the\s+)?([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\s+(?:field|input|box)',
+				reasoning,
+				re.IGNORECASE,
+			)
+			if field_match:
+				field_text = field_match.group(1).strip()
+				print(f'      ✓ Extracted field name: "{field_text}"')
+				return field_text
+
+		return None
+
 	def _extract_target_text(
 		self, element_data: Optional[Dict[str, Any]], action_dict: Dict[str, Any], agent_context: Optional[Dict[str, Any]] = None
 	) -> str:
@@ -339,10 +680,18 @@ class DeterministicWorkflowConverter:
 		6. name attribute (if human-readable, not technical ID)
 		7. id attribute (only if human-readable, not technical ID)
 		8. href attribute (for anchor tags) - extract meaningful part
-		9. Input text being entered (for input actions)
-		10. Node name + xpath hint (absolute fallback)
+		9. Agent reasoning (structured [ELEMENT] tags or patterns)
+		10. Input text being entered (for input actions)
+		11. Node name + xpath hint (absolute fallback)
 		"""
+		# IMPORTANT: Even if element_data is None, we should try to extract from agent reasoning FIRST
+		# This helps when we have dynamic elements (modals/popups) that weren't captured
 		if not element_data:
+			print('      ⚠️  No element_data available, trying agent reasoning extraction...')
+			# Try agent reasoning extraction before giving up
+			extracted = self._extract_from_agent_reasoning(action_dict, agent_context)
+			if extracted:
+				return extracted
 			# For input actions, use the text being entered as fallback
 			if action_dict.get('text'):
 				return action_dict['text']
@@ -631,6 +980,10 @@ class DeterministicWorkflowConverter:
 			# Add multi-strategy selectors for robust element finding
 			if element_data and element_data.get('selector_strategies'):
 				step['selectorStrategies'] = element_data['selector_strategies']
+			elif target_text and target_text != 'input field':
+				# FALLBACK: Generate basic text-based strategies for input fields
+				print(f'      🔧 Generating fallback input strategies for: "{target_text}"')
+				step['selectorStrategies'] = self._generate_fallback_input_strategies(target_text)
 
 			# Add semantic metadata
 			if agent_context.get('reasoning'):
@@ -742,6 +1095,11 @@ class DeterministicWorkflowConverter:
 			# Add multi-strategy selectors for robust element finding
 			if element_data and element_data.get('selector_strategies'):
 				step['selectorStrategies'] = element_data['selector_strategies']
+			elif target_text and target_text != 'element':
+				# FALLBACK: Generate basic text-based strategies when element_data is missing
+				# This helps with dynamic elements (modals, popups) that weren't captured
+				print(f'      🔧 Generating fallback text-based strategies for: "{target_text}"')
+				step['selectorStrategies'] = self._generate_fallback_strategies(target_text)
 
 			# Add semantic metadata (optional fields that provide context)
 			if agent_context.get('reasoning'):
