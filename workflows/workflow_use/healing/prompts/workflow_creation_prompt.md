@@ -71,22 +71,25 @@ Each message contains two parts:
 
 ### 1. Workflow Analysis (CRITICAL FIRST STEP)
 
-The `workflow_analysis` field **must be completed first** and contain:
+The `workflow_analysis` field **must be a SINGLE STRING** (NOT an object/dict!) containing your chain-of-thought reasoning. Include all of the following in one continuous text:
 
 1. **Step Analysis**: What the recorded steps accomplish overall
 2. **Task Definition**: Clear purpose of the workflow being created
 3. **Action Plan**: Detailed to-do list of all necessary workflow steps
-4. **Variable Identification**:
-   - Analyze ALL values entered/selected during the workflow
-   - Identify which values are:
-     - **SHOULD BE VARIABLES**: User-specific data (names, emails, search terms, dates, amounts, selections)
-     - **SHOULD BE HARDCODED**: Navigation targets, UI element labels, constant values
-   - For each variable, specify:
-     - Variable name (descriptive, snake_case)
-     - Type (string/number/bool)
-     - Format requirements (if applicable, e.g., "MM/DD/YYYY", "email format")
-     - Whether it's required or optional
-5. **Step Optimization**: Review if steps can be combined, simplified, or if any are missing. If you think a step has a variable on the `elementHash` field, use `agent` step.
+4. **Variable Identification**: List which values should be variables vs hardcoded
+5. **Step Optimization**: Notes on combining/simplifying steps
+
+**IMPORTANT**: Write this as a single paragraph or multi-paragraph STRING, not as a JSON object!
+
+Example:
+```json
+"workflow_analysis": "The recorded steps navigate to a product page, add to cart, and test promo codes. This workflow tests cart promotions. Variables needed: product_url (string, URL format), promo_code_1 (string), promo_code_2 (string). Steps can be optimized by..."
+```
+
+**NOT like this (WRONG)**:
+```json
+"workflow_analysis": {"step_analysis": "...", "task_definition": "..."}  // WRONG! This is an object, not a string!
+```
 
 ### 2. Input Schema
 
@@ -115,11 +118,7 @@ Define workflow parameters using JSON Schema draft-7 subset:
 - Empty input schema only if no dynamic inputs exist (justify in workflow_analysis)
 - For each input, specify the "format" field if there are formatting requirements (e.g., "MM/DD/YYYY", "user@domain.com", "(xxx) xxx-xxxx")
 
-### 3. Output Schema
-
-Define the structure of data the workflow will return, combining results from all `extract_page_content` steps.
-
-### 4. Steps Array
+### 3. Steps Array
 
 Each step must include a `"type"` field and a brief `"description"`.
 
@@ -193,6 +192,38 @@ Each step must include a `"type"` field and a brief `"description"`.
     - **AJAX-powered interfaces** - Content that loads asynchronously after page load
 
   **Why Agent Steps Are Essential**: These elements have dynamic content, unpredictable timing, or complex state that makes deterministic element hashing unreliable. Attempting to use deterministic steps will result in workflow failures when element positions, IDs, or content change. Agent steps provide the flexibility and intelligence needed to handle these dynamic scenarios reliably.
+
+## EXACT Output JSON Structure (MANDATORY)
+
+Your response MUST be valid JSON with these EXACT fields:
+
+```json
+{
+  "workflow_analysis": "A single string containing your chain-of-thought reasoning...",
+  "name": "workflow-name-in-kebab-case",
+  "description": "A human-readable description of what this workflow does",
+  "version": "1.0.0",
+  "input_schema": [
+    {"name": "variable_name", "type": "string", "required": true, "format": "example@email.com"}
+  ],
+  "steps": [
+    {"type": "navigation", "url": "{variable_name}", "description": "Navigate to URL"},
+    {"type": "click", "target_text": "Button Text", "description": "Click button"},
+    {"type": "extract_page_content", "goal": "Extract the results", "description": "Final extraction"}
+  ]
+}
+```
+
+### MANDATORY Fields:
+- **workflow_analysis** (string): Your reasoning as a SINGLE STRING (NOT an object/dict!)
+- **name** (string): Short workflow name in kebab-case (e.g., "test-promo-codes", "fill-contact-form")
+- **description** (string): Human-readable description of the workflow's purpose
+- **version** (string): Semantic version, always use "1.0.0" for new workflows
+- **input_schema** (array): List of input parameter definitions (can be empty `[]`)
+- **steps** (array): List of workflow steps, MUST end with extract/extract_page_content
+
+### DO NOT include these fields:
+- **output_schema** - This is NOT part of the schema, do not include it!
 
 ## Critical Requirements
 
