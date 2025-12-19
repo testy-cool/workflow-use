@@ -15,6 +15,7 @@ from browser_use.llm import SystemMessage, UserMessage
 from browser_use.llm.base import BaseChatModel
 from pydantic import BaseModel, Field
 
+from workflow_use.llm_utils import invoke_with_structured_output
 from workflow_use.schema.views import WorkflowDefinitionSchema
 
 # Get the absolute path to the prompts directory
@@ -83,10 +84,14 @@ class WorkflowValidator:
 		system_message = SystemMessage(content=prompt_content)
 		user_message = UserMessage(content=validation_context)
 
-		# Get validation result from AI
+		# Get validation result from AI using Gemini-compatible structured output handling
 		try:
-			response = await self.llm.ainvoke([system_message, user_message], output_format=WorkflowValidationResult)
-			result: WorkflowValidationResult = response.completion  # type: ignore
+			result = await invoke_with_structured_output(
+				self.llm,
+				[system_message, user_message],
+				WorkflowValidationResult,
+				fallback_to_json_parsing=True,
+			)
 		except Exception as e:
 			print('ERROR: Failed to validate workflow')
 			print(f'Error details: {e}')

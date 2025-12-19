@@ -12,6 +12,7 @@ from pydantic import ValidationError
 
 from workflow_use.builder.prompts import WORKFLOW_BUILDER_PROMPT_TEMPLATE
 from workflow_use.controller.service import WorkflowController
+from workflow_use.llm_utils import invoke_with_structured_output
 from workflow_use.schema.views import WorkflowDefinitionSchema
 
 logger = logging.getLogger(__name__)
@@ -223,12 +224,14 @@ class BuilderService:
 
 		logger.info(f'Prepared {len(vision_messages)} total message parts, including {images_used} images.')
 
-		# Invoke the LLM with structured output
+		# Invoke the LLM with Gemini-compatible structured output handling
 		try:
-			llm_response = await self.llm.ainvoke(
-				[UserMessage(content=cast(Any, vision_messages))], output_format=WorkflowDefinitionSchema
+			workflow_data = await invoke_with_structured_output(
+				self.llm,
+				[UserMessage(content=cast(Any, vision_messages))],
+				WorkflowDefinitionSchema,
+				fallback_to_json_parsing=True,
 			)
-			workflow_data = llm_response.completion
 		except Exception as e:
 			logger.exception(f'An error occurred during LLM invocation or processing: {e}')
 			raise

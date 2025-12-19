@@ -16,6 +16,7 @@ from workflow_use.healing.selector_generator import SelectorGenerator
 from workflow_use.healing.validator import WorkflowValidator
 from workflow_use.healing.variable_extractor import VariableExtractor
 from workflow_use.healing.views import ParsedAgentStep, SimpleDomElement, SimpleResult
+from workflow_use.llm_utils import invoke_with_structured_output
 from workflow_use.schema.views import WorkflowDefinitionSchema
 
 # Type definitions for progress tracking callbacks
@@ -288,14 +289,18 @@ class HealingService:
 
 		all_messages: Sequence[BaseMessage] = [system_message] + human_messages
 
-		# Use browser-use's output_format parameter for structured output
+		# Use Gemini-compatible structured output handling
 		try:
-			response = await self.llm.ainvoke(all_messages, output_format=WorkflowDefinitionSchema)
-			workflow_definition: WorkflowDefinitionSchema = response.completion  # type: ignore
+			workflow_definition = await invoke_with_structured_output(
+				self.llm,
+				all_messages,
+				WorkflowDefinitionSchema,
+				fallback_to_json_parsing=True,
+			)
 		except Exception as e:
 			print('ERROR: Failed to generate structured workflow definition')
 			print(f'Error details: {e}')
-			# Try to get the raw response
+			# Try to get the raw response for debugging
 			try:
 				raw_response = await self.llm.ainvoke(all_messages)
 				print('\nRaw LLM response:')

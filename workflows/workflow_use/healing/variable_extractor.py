@@ -13,6 +13,7 @@ from browser_use.llm import SystemMessage, UserMessage
 from browser_use.llm.base import BaseChatModel
 from pydantic import BaseModel
 
+from workflow_use.llm_utils import invoke_with_structured_output
 from workflow_use.schema.views import (
 	InputStep,
 	NavigationStep,
@@ -229,9 +230,13 @@ class VariableExtractor:
 
 		messages = [SystemMessage(content=prompt), UserMessage(content='Please analyze this workflow and suggest variables.')]
 
-		# Use structured output to get suggestions
-		response = await self.llm.ainvoke(messages, output_format=VariableExtractionResult)
-		result: VariableExtractionResult = response.completion
+		# Use Gemini-compatible structured output handling
+		result = await invoke_with_structured_output(
+			self.llm,
+			messages,
+			VariableExtractionResult,
+			fallback_to_json_parsing=True,
+		)
 
 		return result
 

@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field, create_model
 
 from workflow_use.controller.service import WorkflowController
 from workflow_use.controller.utils import get_best_element_handle
+from workflow_use.llm_utils import invoke_with_structured_output
 from workflow_use.schema.views import (
 	AgenticWorkflowStep,
 	DeterministicWorkflowStep,
@@ -765,8 +766,14 @@ Extracted Information:"""
 			UserMessage(content=combined_text),
 		]
 
-		response = await self.llm.ainvoke(messages, output_format=output_model)
-		return response.completion
+		# Use Gemini-compatible structured output handling
+		result = await invoke_with_structured_output(
+			self.llm,
+			messages,
+			output_model,
+			fallback_to_json_parsing=True,
+		)
+		return result
 
 	async def run_step(self, step_index: int, inputs: dict[str, Any] | None = None):
 		"""Run a *single* workflow step asynchronously and return its result.
@@ -1033,8 +1040,14 @@ Extract the values from the user's prompt and return them in the required format
 
 		messages = [SystemMessage(content=system_prompt), UserMessage(content=prompt)]
 
-		response = await self.llm.ainvoke(messages, output_format=input_model)
-		inputs = response.completion.model_dump()
+		# Use Gemini-compatible structured output handling
+		parsed_inputs = await invoke_with_structured_output(
+			self.llm,
+			messages,
+			input_model,
+			fallback_to_json_parsing=True,
+		)
+		inputs = parsed_inputs.model_dump()
 
 		# Run the workflow with parsed inputs
 		result = await self.run(inputs=inputs, close_browser_at_end=True)
