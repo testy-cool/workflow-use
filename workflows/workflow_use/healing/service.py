@@ -278,7 +278,7 @@ class HealingService:
 	) -> WorkflowDefinitionSchema:
 		# Load prompt using absolute path
 		prompt_file = _PROMPTS_DIR / 'workflow_creation_prompt.md'
-		async with aiofiles.open(prompt_file, mode='r') as f:
+		async with aiofiles.open(prompt_file, mode='r', encoding='utf-8') as f:
 			prompt_content = await f.read()
 
 		prompt_content = prompt_content.format(goal=task, actions=BuilderService._get_available_actions_markdown())
