@@ -36,6 +36,7 @@ class SemanticExtractionDemo:
 	async def __aenter__(self):
 		"""Async context manager entry."""
 		self.browser = Browser()
+		await self.browser.start()
 		return self
 
 	async def __aexit__(self, exc_type, exc_val, exc_tb):
@@ -128,8 +129,10 @@ async def main():
 			else:
 				print(f'❌ HTML file not found: {html_path}')
 		else:
-			# Default: run government form demo
-			mapping = await demo.demo_complex_form()
+			# Default: run demo with example.com
+			print('No URL or HTML file specified. Running demo with example.com...')
+			print('Use --url <URL> or --html-file <PATH> for custom targets.\n')
+			mapping = await demo.demo_from_url('https://example.com')
 
 		if args.save and mapping:
 			await demo.save_mapping_to_file(mapping, args.save)
