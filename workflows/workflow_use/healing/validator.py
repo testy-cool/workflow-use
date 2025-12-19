@@ -61,7 +61,7 @@ class WorkflowValidator:
 		"""
 		# Load validation prompt using absolute path
 		prompt_file = _PROMPTS_DIR / 'workflow_validation_prompt.md'
-		async with aiofiles.open(prompt_file, mode='r') as f:
+		async with aiofiles.open(prompt_file, mode='r', encoding='utf-8') as f:
 			prompt_content = await f.read()
 
 		# Prepare workflow JSON for review
