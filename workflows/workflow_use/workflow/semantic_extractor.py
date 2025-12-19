@@ -787,7 +787,7 @@ class SemanticExtractor:
 				debug_file = f'semantic_extraction_debug_{int(asyncio.get_event_loop().time())}.json'
 				import json
 
-				async with aiofiles.open(debug_file, 'w') as f:
+				async with aiofiles.open(debug_file, 'w', encoding='utf-8') as f:
 					await f.write(json.dumps(result, indent=2))
 				logger.info(f'Debug information saved to: {debug_file}')
 
@@ -805,7 +805,7 @@ class SemanticExtractor:
 			# Save error information for debugging
 			if debug_mode:
 				error_file = f'semantic_extraction_error_{int(asyncio.get_event_loop().time())}.txt'
-				async with aiofiles.open(error_file, 'w') as f:
+				async with aiofiles.open(error_file, 'w', encoding='utf-8') as f:
 					await f.write(f'Error: {str(e)}\n')
 					await f.write(f'URL: {await page.get_url()}\n')
 					await f.write(f'Timestamp: {asyncio.get_event_loop().time()}\n')

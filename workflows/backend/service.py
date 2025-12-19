@@ -55,7 +55,7 @@ class WorkflowService:
 	async def _log_file_position(self) -> int:
 		log_file = self.log_dir / 'backend.log'
 		if not log_file.exists():
-			async with aiofiles.open(log_file, 'w') as f:
+			async with aiofiles.open(log_file, 'w', encoding='utf-8') as f:
 				await f.write('')
 			return 0
 		return log_file.stat().st_size
@@ -69,7 +69,7 @@ class WorkflowService:
 		if position >= current_size:
 			return [], position
 
-		async with aiofiles.open(log_file, 'r') as f:
+		async with aiofiles.open(log_file, 'r', encoding='utf-8') as f:
 			await f.seek(position)
 			all_logs = await f.readlines()
 			new_logs = [
@@ -83,7 +83,7 @@ class WorkflowService:
 		return new_logs, current_size
 
 	async def _write_log(self, log_file: Path, message: str) -> None:
-		async with aiofiles.open(log_file, 'a') as f:
+		async with aiofiles.open(log_file, 'a', encoding='utf-8') as f:
 			await f.write(message)
 
 	def list_workflows(self) -> List[str]:

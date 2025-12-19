@@ -239,7 +239,7 @@ class BuilderService:
 	# path handlers
 	async def build_workflow_from_path(self, path: Path, user_goal: str) -> WorkflowDefinitionSchema:
 		"""Build a workflow from a JSON file path."""
-		async with aiofiles.open(path, 'r') as f:
+		async with aiofiles.open(path, 'r', encoding='utf-8') as f:
 			content = await f.read()
 			workflow_data = json.loads(content)
 
@@ -248,5 +248,5 @@ class BuilderService:
 
 	async def save_workflow_to_path(self, workflow: WorkflowDefinitionSchema, path: Path):
 		"""Save a workflow to a JSON file path."""
-		async with aiofiles.open(path, 'w') as f:
+		async with aiofiles.open(path, 'w', encoding='utf-8') as f:
 			await f.write(json.dumps(workflow.model_dump(mode='json'), indent=2))

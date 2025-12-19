@@ -1597,7 +1597,7 @@ def generate_semantic_mapping_command(
 						'selectors': element_info['selectors'],
 					}
 
-				async with aiofiles.open(output_file, 'w') as f:
+				async with aiofiles.open(output_file, 'w', encoding='utf-8') as f:
 					import json
 
 					await f.write(json.dumps(output_data, indent=2))
@@ -1718,7 +1718,7 @@ def create_semantic_workflow_command(
 			template['example_steps_to_customize'] = example_steps
 
 			# Save template
-			async with aiofiles.open(output_path, 'w') as f:
+			async with aiofiles.open(output_path, 'w', encoding='utf-8') as f:
 				import json
 
 				await f.write(json.dumps(template, indent=2))
