@@ -546,7 +546,7 @@ class SemanticExtractor:
                                 const cellText = prevCell.textContent?.trim() || '';
                                 // Only use if it looks like a label (short text, ends with colon, etc.)
                                 if (cellText && cellText.length < 50) {
-                                    labelText = cellText.replace(/[:：]\s*$/, '').trim();
+                                    labelText = cellText.replace(/[:：]\\s*$/, '').trim();
                                 }
                             }
                         }

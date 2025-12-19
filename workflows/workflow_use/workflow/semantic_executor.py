@@ -523,6 +523,131 @@ class SemanticWorkflowExecutor:
 
 		return None
 
+	async def _find_element_by_direct_text_search(self, target_text: str) -> Optional[str]:
+		"""
+		Search for an element directly on the page by its text content.
+		This is a fallback when semantic mapping fails to find the element.
+
+		Args:
+		    target_text: The text to search for
+
+		Returns:
+		    CSS selector for the element if found, None otherwise
+		"""
+		if not target_text:
+			return None
+
+		page = await self.browser.get_current_page()
+
+		# JavaScript to find clickable elements by text content
+		js_code = """
+		(targetText) => {
+			const normalizeText = (text) => {
+				return (text || '').toLowerCase().trim().replace(/\\s+/g, ' ');
+			};
+
+			const targetNormalized = normalizeText(targetText);
+			if (!targetNormalized) return null;
+
+			// Search for clickable elements
+			const clickableSelectors = [
+				'button',
+				'input[type="submit"]',
+				'input[type="button"]',
+				'a',
+				'[role="button"]',
+				'[onclick]',
+				'.btn',
+				'.button'
+			];
+
+			const allClickable = document.querySelectorAll(clickableSelectors.join(', '));
+
+			for (const el of allClickable) {
+				// Get all text sources
+				const textContent = normalizeText(el.textContent);
+				const ariaLabel = normalizeText(el.getAttribute('aria-label'));
+				const title = normalizeText(el.getAttribute('title'));
+				const value = normalizeText(el.value);
+
+				// Check if any text source matches
+				const matches = [textContent, ariaLabel, title, value].some(text => {
+					if (!text) return false;
+					return text === targetNormalized ||
+						   text.includes(targetNormalized) ||
+						   targetNormalized.includes(text);
+				});
+
+				if (matches) {
+					// Check if element is visible
+					const rect = el.getBoundingClientRect();
+					const style = getComputedStyle(el);
+					if (rect.width === 0 || rect.height === 0 ||
+						style.visibility === 'hidden' ||
+						style.display === 'none') {
+						continue;
+					}
+
+					// Generate a unique selector
+					if (el.id) {
+						return '#' + el.id;
+					}
+
+					// Try to build a unique selector
+					let selector = el.tagName.toLowerCase();
+
+					if (el.name) {
+						selector += '[name="' + el.name + '"]';
+					} else if (el.type && el.type !== 'submit') {
+						selector += '[type="' + el.type + '"]';
+					}
+
+					// Add classes for specificity
+					if (el.className && typeof el.className === 'string') {
+						const classes = el.className.split(' ').filter(c => c && !c.includes(':'));
+						if (classes.length > 0) {
+							selector += '.' + classes.slice(0, 2).join('.');
+						}
+					}
+
+					// Verify uniqueness
+					const matches = document.querySelectorAll(selector);
+					if (matches.length === 1) {
+						return selector;
+					}
+
+					// Add nth-of-type if needed
+					const parent = el.parentElement;
+					if (parent) {
+						const siblings = Array.from(parent.querySelectorAll(':scope > ' + el.tagName.toLowerCase()));
+						const index = siblings.indexOf(el) + 1;
+						if (index > 0) {
+							const parentSelector = parent.id ? '#' + parent.id : parent.tagName.toLowerCase();
+							return parentSelector + ' > ' + el.tagName.toLowerCase() + ':nth-of-type(' + index + ')';
+						}
+					}
+
+					// Return basic selector as fallback
+					return selector;
+				}
+			}
+
+			return null;
+		}
+		"""
+
+		try:
+			selector = await page.evaluate(js_code, target_text)
+			if selector:
+				logger.info(f"🔍 Direct text search found element: '{target_text}' -> {selector}")
+				return selector
+			else:
+				logger.debug(f"Direct text search did not find element for: '{target_text}'")
+				return None
+		except Exception as e:
+			logger.debug(f"Direct text search failed: {e}")
+			return None
+
 	async def _try_direct_selector(self, target_text: str) -> Optional[str]:
 		"""Try to use target_text as a direct selector (ID or name) with improved robustness."""
 		if not target_text or not target_text.replace('_', '').replace('-', '').replace('.', '').isalnum():
@@ -870,27 +995,37 @@ class SemanticWorkflowExecutor:
 				# Try XPath as fallback if CSS selector is not available
 				selector_to_use = f'xpath={step.xpath}'
 				logger.info(f'Falling back to XPath selector: {step.xpath}')
-			else:
-				# Enhanced error message with debugging info
-				available_texts = list(self.current_mapping.keys())[:15]  # Show first 15 available options
-				error_msg = f"No selector available for click step: '{target_identifier or step.description}'"
-				error_msg += f'\nAvailable elements on page: {available_texts}'
-				if len(self.current_mapping) > 15:
-					error_msg += f' (and {len(self.current_mapping) - 15} more)'
 
-				# Try to find similar text matches for debugging
-				if target_identifier:
-					similar_matches = []
-					target_lower = target_identifier.lower()
-					for text in self.current_mapping.keys():
-						if any(word in text.lower() for word in target_lower.split()):
-							similar_matches.append(text)
+		# PRIORITY 4: Direct text search on the page (when semantic mapping fails)
+		if not selector_to_use and target_identifier:
+			logger.info(f'🔍 Trying direct text search for: {target_identifier}')
+			direct_selector = await self._find_element_by_direct_text_search(target_identifier)
+			if direct_selector:
+				selector_to_use = direct_selector
+				logger.info(f'✅ Found element via direct text search: {direct_selector}')
 
-					if similar_matches:
-						error_msg += f'\nSimilar text found: {similar_matches[:5]}'
+		# If still no selector, raise error
+		if not selector_to_use:
+			# Enhanced error message with debugging info
+			available_texts = list(self.current_mapping.keys())[:15]  # Show first 15 available options
+			error_msg = f"No selector available for click step: '{target_identifier or step.description}'"
+			error_msg += f'\nAvailable elements on page: {available_texts}'
+			if len(self.current_mapping) > 15:
+				error_msg += f' (and {len(self.current_mapping) - 15} more)'
 
-				logger.error(error_msg)
-				raise Exception(error_msg)
+			# Try to find similar text matches for debugging
+			if target_identifier:
+				similar_matches = []
+				target_lower = target_identifier.lower()
+				for text in self.current_mapping.keys():
+					if any(word in text.lower() for word in target_lower.split()):
+						similar_matches.append(text)
+
+				if similar_matches:
+					error_msg += f'\nSimilar text found: {similar_matches[:5]}'
+
+			logger.error(error_msg)
+			raise Exception(error_msg)
 
 		# Wait for element using hierarchical fallback strategies
 		fallback_selectors = []
